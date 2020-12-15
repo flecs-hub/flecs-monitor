@@ -4,11 +4,19 @@ typedef struct WorldStats {
     ecs_world_stats_t stats;
 } WorldStats;
 
+typedef struct DeltaTime {
+    ecs_gauge_t frame;
+    ecs_gauge_t minute;
+    int32_t t_frame;
+    int32_t t_minute;
+} DeltaTime;
+
 typedef struct PipelineStats {
     ecs_pipeline_stats_t stats;
 } PipelineStats;
 
 static ECS_COMPONENT_DECLARE(WorldStats);
+static ECS_COMPONENT_DECLARE(DeltaTime);
 static ECS_COMPONENT_DECLARE(PipelineStats);
 
 static void add_float_array(
@@ -40,6 +48,14 @@ static void add_gauge(
     ecs_strbuf_list_push(r, "{", ",");
     ecs_strbuf_list_append(r, "\"avg\":");
     add_float_array(r, t, m->avg, scale);
+
+    if (min_max) {
+        ecs_strbuf_list_append(r, "\"min\":");
+        add_float_array(r, t, m->min, scale);
+        ecs_strbuf_list_append(r, "\"max\":");
+        add_float_array(r, t, m->max, scale);
+    }
+
     ecs_strbuf_list_pop(r, "}");
 }
 
@@ -51,11 +67,7 @@ static void add_counter(
     bool min_max,
     float scale)
 {
-    ecs_strbuf_list_append(r, "\"%s\":", name);
-    ecs_strbuf_list_push(r, "{", ",");
-    ecs_strbuf_list_append(r, "\"avg\":");
-    add_float_array(r, t, m->rate.avg, scale);
-    ecs_strbuf_list_pop(r, "}");        
+    add_gauge(r, name, t, &m->rate, min_max, scale);        
 }
 
 #define add_current(r, name, t, m, scale)\
@@ -80,6 +92,11 @@ static void add_world_stats(
     if (!s) {
         return;
     }
+
+    const DeltaTime *s_dt = ecs_get(world, ecs_typeid(DeltaTime), DeltaTime);
+    if (!s_dt) {
+        return;
+    }    
 
     const ecs_world_stats_t *stats = &s->stats;
     int32_t t = stats->t;
@@ -117,6 +134,7 @@ static void add_world_stats(
     ecs_strbuf_list_appendstr(r, "\"history_1m\":");
     ecs_strbuf_list_push(r, "{", ",");
     add_gauge(r, "fps", t, &stats->fps, false, 1.0);
+    add_gauge(r, "delta_time", t, &s_dt->minute, true, 1.0);
     add_counter(r, "frame_time_total", t, &stats->frame_time_total, false, df);
     add_counter(r, "system_time_total", t, &stats->system_time_total, false, df);
     add_counter(r, "merge_time_total", t, &stats->merge_time_total, false, df);
@@ -379,6 +397,21 @@ static void CollectPipelineStats(ecs_iter_t *it) {
     ecs_get_pipeline_stats(it->world, ecs_get_pipeline(it->world), &s->stats);
 }
 
+static void RecordDeltaTime(ecs_iter_t *it) {
+    DeltaTime *s = ecs_column(it, DeltaTime, 1);
+    int32_t t_frame = s->t_frame;
+    s->frame.min[t_frame] = it->delta_time;
+    s->frame.avg[t_frame] = it->delta_time;
+    s->frame.max[t_frame] = it->delta_time;
+    s->t_frame = (t_frame + 1) % ECS_STAT_WINDOW;
+}
+
+static void CollectDeltaTime(ecs_iter_t *it) {
+    DeltaTime *s = ecs_column(it, DeltaTime, 1);
+    ecs_gauge_reduce(&s->minute, s->t_minute, &s->frame, s->t_frame);
+    s->t_minute = (s->t_minute + 1) % ECS_STAT_WINDOW;
+}
+
 static void RunServer(ecs_iter_t *it) {
     ecs_world_t *world = it->world;
     EcsMonitorServer *server = ecs_column(it, EcsMonitorServer, 1);
@@ -415,6 +448,7 @@ void FlecsMonitorImport(
     
     /* Private components */
     ECS_COMPONENT_DEFINE(world, WorldStats);
+    ECS_COMPONENT_DEFINE(world, DeltaTime);
     ECS_COMPONENT_DEFINE(world, PipelineStats);
 
     ECS_SYSTEM(world, RunServer, EcsOnSet, Server,
@@ -423,14 +457,18 @@ void FlecsMonitorImport(
 
     ECS_SYSTEM(world, CollectWorldStats, EcsOnLoad, $WorldStats);
     ECS_SYSTEM(world, CollectPipelineStats, EcsOnLoad, $PipelineStats);
+    ECS_SYSTEM(world, RecordDeltaTime, EcsOnLoad, $DeltaTime);
+    ECS_SYSTEM(world, CollectDeltaTime, EcsOnLoad, $DeltaTime);
 
     /* Collect statistics once per second */
     ecs_set_interval(world, CollectWorldStats, 1.0);
     ecs_set_interval(world, CollectPipelineStats, 1.0);
+    ecs_set_interval(world, CollectDeltaTime, 1.0);
 
     /* Initialize singleton entities for statistics components */
     ecs_set_ptr(world, ecs_typeid(WorldStats), WorldStats, NULL);
     ecs_set_ptr(world, ecs_typeid(PipelineStats), PipelineStats, NULL);
+    ecs_set_ptr(world, ecs_typeid(DeltaTime), DeltaTime, NULL);
 
     ECS_EXPORT_COMPONENT(EcsMonitorServer);
     
