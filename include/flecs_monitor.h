@@ -4,9 +4,13 @@
 /* This generated file contains includes for project dependencies */
 #include "flecs-monitor/bake_config.h"
 
+#ifndef FLECS_LEGACY
+
 ECS_STRUCT(EcsMonitorServer, {
     int16_t port;
 });
+
+#endif
 
 #ifdef __cplusplus
 extern "C" {
