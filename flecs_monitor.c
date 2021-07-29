@@ -32,7 +32,7 @@ static void add_float_array(
     int32_t i;
     for (i = 0; i < ECS_STAT_WINDOW; i ++) {
         int32_t t = (t_start + i + 1) % ECS_STAT_WINDOW;
-        ecs_strbuf_list_append(r, "%f", values[t] / scale);
+        ecs_strbuf_list_append(r, "%f", (double)(values[t] / scale));
     }
 
     ecs_strbuf_list_pop(r, "]");
@@ -82,12 +82,11 @@ static void _add_current(
     const ecs_gauge_t *m,
     float scale)    
 {
-    ecs_strbuf_list_append(r, "\"%s\":%f", name, m->avg[t] / scale);
+    ecs_strbuf_list_append(r, "\"%s\":%f", name, (double)(m->avg[t] / scale));
 }
 
 static void add_world_stats(
     ecs_world_t *world,
-    const ecs_world_info_t *info,
     ecs_strbuf_t *r)
 {
     const WorldStats *s = ecs_get(world, ecs_typeid(WorldStats), WorldStats);
@@ -104,7 +103,7 @@ static void add_world_stats(
     int32_t t = stats->t;
     
     float df = stats->frame_count_total.rate.avg[t];
-    if (df == 0.0) {
+    if (df == 0.0f) {
         return;
     }
 
@@ -169,78 +168,47 @@ static void add_signature(
         ecs_strbuf_list_append(r, "\"signature\":");
         ecs_strbuf_list_push(r, "[", ",");
 
-        ecs_sig_t *sig = ecs_query_get_sig(q->query);
-
-        ecs_sig_column_t *columns = 
-            ecs_vector_first(sig->columns, ecs_sig_column_t);
-        int32_t i, count = ecs_vector_count(sig->columns);
+        const ecs_filter_t *filter = ecs_query_get_filter(q->query);
+        ecs_term_t *terms = filter->terms;
+        int32_t i, count = filter->term_count;
 
         for (i = 0; i < count; i ++) {
-            ecs_sig_column_t *col = &columns[i];
+            ecs_term_t *term = &terms[i];
             
-            if (col->oper_kind != EcsOperOr) {
-                ecs_entity_t component = col->is.component;
+            if (term->oper != EcsOr) {
+                ecs_entity_t id = term->id;
 
                 ecs_strbuf_list_next(r);
                 ecs_strbuf_list_push(r, "{", ",");
 
-                if (component & ECS_TRAIT) {
-                    ecs_entity_t 
-                    lo = ecs_entity_t_lo(component & ECS_COMPONENT_MASK),
-                    hi = ecs_entity_t_hi(component & ECS_COMPONENT_MASK);
+                char buf[2555];
+                ecs_id_str(world, id, buf, 255);
+                ecs_strbuf_list_append(r, "\"name\":\"%s\"", buf);
 
-                    const char
-                    *lo_name = ecs_get_name(world, lo),
-                    *hi_name = ecs_get_name(world, hi);
-
-                    if (!hi) {
-                        ecs_strbuf_list_append(r, "\"name\":\"TRAIT | %s\"", lo_name);
-                    } else {
-                        if (lo_name) {
-                            ecs_strbuf_list_append(r, "\"name\":\"%s FOR %s\"", 
-                                hi_name, lo_name);
-                        } else {
-                            ecs_strbuf_list_append(r, "\"name\":\"%s FOR %u\"", 
-                                hi_name, (uint32_t)lo);
-                        }
-                    }
-                } else {
-                    ecs_strbuf_list_append(r, "\"name\":\"%s\"", 
-                        ecs_get_name(world, col->is.component));
-                }
-
-                ecs_entity_t actual = ecs_get_typeid(world, component);
+                ecs_entity_t actual = ecs_get_typeid(world, id);
                 if (!ecs_has(world, actual, EcsComponent)) {
                     ecs_strbuf_list_append(r, "\"tag\":true");
                 }
 
-                if (col->inout_kind == EcsIn) {
+                if (term->inout == EcsIn) {
                     ecs_strbuf_list_append(r, "\"const\":true");
                 }
 
-                if (col->oper_kind == EcsOperNot) {
+                if (term->oper == EcsNot) {
                     ecs_strbuf_list_append(r, "\"exclude\":true");
                 }
 
-                if (col->from_kind != EcsFromOwned && 
-                    col->from_kind != EcsFromAny && 
-                    col->from_kind != EcsFromShared &&
-                    col->from_kind != EcsFromEmpty) 
-                {
-                    ecs_strbuf_list_append(r, "\"ref\":true");
-                }
-
-                if (col->from_kind == EcsFromEmpty) {
+                if (term->args[0].set.mask == EcsNothing) {
                     ecs_strbuf_list_append(r, "\"empty\":true");
-                }
+                } else {
+                    if (term->args[0].entity != EcsThis) {
+                        ecs_strbuf_list_append(r, "\"ref\":true");   
+                    }
 
-                if (col->from_kind == EcsFromEntity && col->source == component) {
-                    ecs_strbuf_list_append(r, "\"singleton\":true");
-                }
-
-                if (col->from_kind == EcsFromParent || col->from_kind == EcsCascade) {
-                    ecs_strbuf_list_append(r, "\"parent\":true");
-                }                
+                    if (term->args[0].entity == term->id) {
+                        ecs_strbuf_list_append(r, "\"singleton\":true");
+                    }
+                }              
 
                 ecs_strbuf_list_pop(r, "}");
             }
@@ -303,7 +271,6 @@ static void add_system(
 
 static void add_pipeline_stats(
     ecs_world_t *world,
-    const ecs_world_info_t *info,
     ecs_strbuf_t *r)
 {
     /* Get number of frames passed in interval */
@@ -315,7 +282,7 @@ static void add_pipeline_stats(
     const ecs_world_stats_t *wstats = &ws->stats;
     int32_t t = wstats->t;
     float df = wstats->frame_count_total.rate.avg[t];
-    if (df == 0.0) {
+    if (df == 0.0f) {
         return;
     }
 
@@ -352,34 +319,38 @@ static void add_pipeline_stats(
     ecs_strbuf_list_pop(r, "}");
 }
 
-static bool endpoint_world(
+static 
+bool endpoint_world(
     ecs_world_t *world,
     ecs_entity_t entity,
     EcsHttpEndpoint *endpoint,
     EcsHttpRequest *request,
     EcsHttpReply *reply)
 {
+    (void)entity;
+    (void)endpoint;
+
     ecs_strbuf_t r = ECS_STRBUF_INIT;
     
     const ecs_world_info_t *info = ecs_get_world_info(world);
 
     ecs_strbuf_list_push(&r, "{", ",");
 
-    ecs_strbuf_list_append(&r, "\"target_fps\":%f", info->target_fps);
+    ecs_strbuf_list_append(&r, "\"target_fps\":%f", (double)info->target_fps);
 
     char param[256];
     if (ecs_http_get_query_param(
         request->params, "world", param, sizeof(param)) && 
         !strcmp(param, "yes"))
     {
-        add_world_stats(world, info, &r);
+        add_world_stats(world, &r);
     }
 
     if (ecs_http_get_query_param(
         request->params, "pipeline", param, sizeof(param)) && 
         !strcmp(param, "yes"))
     {
-        add_pipeline_stats(world, info, &r);
+        add_pipeline_stats(world, &r);
     }    
 
     ecs_strbuf_list_pop(&r, "}");
@@ -428,7 +399,7 @@ static void RunServer(ecs_iter_t *it) {
 
         /* Add endpoint to server that returns entity id of server */
         ecs_entity_t e_metrics = ecs_new_w_entity(world, ECS_CHILDOF | e);
-            ecs_set(world, e_metrics, EcsName, {"e_metrics"});
+            ecs_set(world, e_metrics, EcsName, {.value = "e_metrics"});
             ecs_set(world, e_metrics, EcsHttpEndpoint, {
                 .url = "metrics",
                 .action = endpoint_world,

@@ -7,8 +7,8 @@
 #ifndef FLECS_LEGACY
 
 ECS_STRUCT(EcsMonitorServer, {
-    int16_t port;
-});
+    uint16_t port;
+})
 
 #endif
 
