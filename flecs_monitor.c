@@ -399,7 +399,7 @@ static void RunServer(ecs_iter_t *it) {
 
         /* Add endpoint to server that returns entity id of server */
         ecs_entity_t e_metrics = ecs_new_w_entity(world, ECS_CHILDOF | e);
-            ecs_set(world, e_metrics, EcsName, {.value = "e_metrics"});
+            ecs_set_name(world, e_metrics, "e_metrics");
             ecs_set(world, e_metrics, EcsHttpEndpoint, {
                 .url = "metrics",
                 .action = endpoint_world,
